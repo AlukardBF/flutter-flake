@@ -1,84 +1,161 @@
 {
-  outputs = { self }: {
-    templates.android = {
-      path = ./android;
-      description =
-        "A flake for getting a dev shell with Android SDK & Flutter using flutter-flake";
+  description = "Flutter FHS Environment";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    flutter-nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    devshell = {
+      url = "github:numtide/devshell";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
-    lib = let
-      optional = q: x: optList q [ x ];
-      optList = q: xs: if q then xs else [ ];
-      optStr = q: str:
-        if q then ''
-          ${str}
-        '' else
-          "";
-      guard = q: k: if q then k else null;
+    android-nixpkgs = {
+      url = "github:tadfisher/android-nixpkgs";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-    in {
-      get-devShell = { nixpkgs, pkgs ? import nixpkgs {
+  outputs = { self, nixpkgs, flutter-nixpkgs, devshell, android-nixpkgs }: {
+    getShell = {
+      pkgs ? import nixpkgs {
         inherit system;
-        config = nixpkgsConfig;
-      }, system, nixpkgsConfig ? { }, enable-android ? false
-        , enable-linuxDesktop ? false, enable-web ? false
-        , enable-windowsDesktop ? false, enable-macDesktop ? false
-        , enable-ios ? false, extra-deps ? [ ], androidConfig ? { }
-        , chromeExecutable ? pkgs.ungoogled-chromium + "/bin/chromium" }:
+        config = nixpkgsConfig // {
+          allowUnfree = true;
+          android_sdk.accept_license = true;
+        };
+        overlays = [ devshell.overlay ];
+      }
+      , flutter-pkgs ? import flutter-nixpkgs {
+        inherit system;
+      }
+      , name ? "flutter-project", system, nixpkgsConfig ? { }
+      , enable-android ? false, enable-ios ? false
+      , enable-linuxDesktop ? false, enable-web ? false
+      , enable-windowsDesktop ? false, enable-macDesktop ? false
+      , extra-deps ? [ ], extra-libs ? [ ], jdk ? pkgs.jdk11
+      , chromeExecutable ? pkgs.ungoogled-chromium + "/bin/chromium"
+      , android-sdk ? android-nixpkgs.sdk.${system} (sdkPkgs: with sdkPkgs; [
+        cmdline-tools-latest
+        build-tools-30-0-3
+        emulator
+        patcher-v4
+        platform-tools
+        platforms-android-31
+      ])
+    }: with pkgs; let
+      optList = q: xs: if q then xs else [ ];
+      linuxLibs = [
+        at-spi2-atk
+        at-spi2-core
+        dbus
+        atk
+        bzip2
+        cairo
+        epoxy
+        expat
+        fontconfig
+        freetype
+        fribidi
+        gdk-pixbuf
+        glib
+        graphite2
+        gtk3
+        harfbuzz
+        libGL
+        libdatrie
+        libffi
+        libjpeg
+        libpng
+        libselinux
+        libsepol
+        libthai
+        libtiff
+        libuuid
+        libxkbcommon
+        pango
+        pcre
+        pixman
+        wayland
+        xorg.libX11
+        xorg.libXau
+        xorg.libXcomposite
+        xorg.libXcursor
+        xorg.libXdmcp
+        xorg.libXext
+        xorg.libXfixes
+        xorg.libXft
+        xorg.libXi
+        xorg.libXinerama
+        xorg.libXrandr
+        xorg.libXrender
+        xorg.libxcb
+        xorg.xorgproto
+        zlib
+      ];
 
-        let
-          androidComposition = pkgs.androidenv.composeAndroidPackages {
-            platformToolsVersion = "31.0.3";
-            toolsVersion = "26.1.1";
-            includeEmulator = true;
-          } // androidConfig;
-
-          flutter-deps = optional enable-android androidComposition.androidsdk
-            ++ optList enable-linuxDesktop (with pkgs; [
-              clang
-              cmake
-              ninja
-              pkg-config
-              # libs:
-              atk
-              cairo
-              epoxy
-              gdk-pixbuf
-              glib
-              gtk3
-              harfbuzz
-              pango
-              pcre
-              xorg.libX11.dev
-              xorg.xorgproto
-            ]);
-
-          flutter-fhs = pkgs.buildFHSUserEnv {
-            name = "flutter";
-            targetPkgs = (_: flutter-deps);
-            runScript = pkgs.flutter + "/bin/flutter";
-          };
-
-        in if enable-ios || enable-macDesktop || enable-windowsDesktop then
-          builtins.throw ''
-            iOS, macOS and Windows are not supported currently. Feel free to contribute.
-          ''
-        else
-          assert !enable-ios;
-          assert !enable-macDesktop;
-          assert !enable-windowsDesktop;
-          pkgs.mkShell {
-            packages = with pkgs; [ flutter-fhs ] ++ flutter-deps;
-            shellHook = optStr enable-android ''
-              flutter config --enable-android
-              flutter config --android-sdk ${androidComposition.androidsdk}/libexec/android-sdk
-            '' + optStr enable-linuxDesktop ''
-              flutter config --enable-linux-desktop
-            '' + optStr enable-web ''
-              export CHROME_EXECUTABLE=${chromeExecutable}
-            '';
-            CPATH = optStr enable-linuxDesktop "${pkgs.xorg.libX11.dev}/include:${pkgs.xorg.xorgproto}/include:${pkgs.epoxy}/lib";
-            LD_LIBRARY_PATH = with pkgs; lib.optionals enable-linuxDesktop pkgs.lib.makeLibraryPath [ epoxy gtk3 pango harfbuzz atk cairo gdk-pixbuf glib ];
-          };
+      flutter-deps = optList enable-android [
+        android-sdk
+        gradle
+        jdk
+      ] ++ optList enable-linuxDesktop [
+        clang
+        cmake
+        ninja
+        pkg-config
+      ]
+      ++ optList enable-linuxDesktop (map lib.getLib linuxLibs)
+      ++ optList enable-linuxDesktop (map lib.getDev linuxLibs)
+      ++ (map lib.getLib extra-libs) ++ (map lib.getDev extra-libs);
+    in pkgs.devshell.mkShell {
+      name = name;
+      env = [
+        {
+          name = "PATH";
+          prefix = "$HOME/.pub-cache/bin";
+        }
+        {
+          name = "PATH";
+          prefix = "${flutter-pkgs.flutter}/bin/cache/dart-sdk/bin";
+        }
+      ] ++ optList enable-android [
+        {
+          name = "ANDROID_HOME";
+          value = "${android-sdk}/share/android-sdk";
+        }
+        {
+          name = "ANDROID_SDK_ROOT";
+          value = "${android-sdk}/share/android-sdk";
+        }
+        {
+          name = "JAVA_HOME";
+          value = jdk.home;
+        }
+      ] ++ optList enable-linuxDesktop [
+        {
+          name = "LD_LIBRARY_PATH";
+          prefix = "$DEVSHELL_DIR/lib";
+        }
+        {
+          name = "C_INCLUDE_PATH";
+          prefix = "$DEVSHELL_DIR/include";
+        }
+        {
+          name = "CPLUS_INCLUDE_PATH";
+          prefix = "$DEVSHELL_DIR/include";
+        }
+        {
+          name = "PKG_CONFIG_PATH";
+          prefix = "$DEVSHELL_DIR/lib/pkgconfig";
+        }
+        {
+          name = "CMAKE_PREFIX_PATH";
+          prefix = "$DEVSHELL_DIR";
+        }
+      ] ++ optList enable-web [
+        {
+          name = "CHROME_EXECUTABLE";
+          value = chromeExecutable;
+        }
+      ];
+      packages = [ flutter-pkgs.flutter ] ++ flutter-deps ++ extra-deps;
     };
   };
 }
