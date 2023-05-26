@@ -1,5 +1,9 @@
 # flutter-flake
 
+This project is deprecated, please use [nix-flutter-flake](https://github.com/AtaraxiaSjel/nix-flutter-flake)
+
+## Description
+
 This is a flake that configures Flutter for you.
 
 It was created because I hated configuring Android for Flutter. It’s currently mostly made to do that.
